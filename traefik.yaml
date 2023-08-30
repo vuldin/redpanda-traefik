@@ -1,0 +1,154 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: traefik
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redpanda-config
+  namespace: traefik
+data:
+  redpanda.yml: |
+    tcp:
+      services:
+        redpanda-0-kafka:
+          loadBalancer:
+            servers:
+              - address: "redpanda-0.redpanda.redpanda.svc.cluster.local.:9094"
+        redpanda-1-kafka:
+          loadBalancer:
+            servers:
+              - address: "redpanda-1.redpanda.redpanda.svc.cluster.local.:9094"
+        redpanda-2-kafka:
+          loadBalancer:
+            servers:
+              - address: "redpanda-2.redpanda.redpanda.svc.cluster.local.:9094"
+        redpanda-0-admin:
+          loadBalancer:
+            servers:
+              - address: "redpanda-0.redpanda.redpanda.svc.cluster.local.:9644"
+        redpanda-1-admin:
+          loadBalancer:
+            servers:
+              - address: "redpanda-1.redpanda.redpanda.svc.cluster.local.:9644"
+        redpanda-2-admin:
+          loadBalancer:
+            servers:
+              - address: "redpanda-2.redpanda.redpanda.svc.cluster.local.:9644"
+      routers:
+        redpanda-kafka-0:
+          entryPoints:
+            - "rp-kafka"
+          rule: "HostSNI(`redpanda-0.local`)"
+          service: "redpanda-0-kafka"
+          tls:
+            passthrough: true
+        redpanda-kafka-1:
+          entryPoints:
+            - "rp-kafka"
+          rule: "HostSNI(`redpanda-1.local`)"
+          service: "redpanda-1-kafka"
+          tls:
+            passthrough: true
+        redpanda-kafka-2:
+          entryPoints:
+            - "rp-kafka"
+          rule: "HostSNI(`redpanda-2.local`)"
+          service: "redpanda-2-kafka"
+          tls:
+            passthrough: true
+        redpanda-admin-0:
+          entryPoints:
+            - "rp-admin"
+          rule: "HostSNI(`redpanda-0.local`)"
+          service: "redpanda-0-admin"
+          tls:
+            passthrough: true
+        redpanda-admin-1:
+          entryPoints:
+            - "rp-admin"
+          rule: "HostSNI(`redpanda-1.local`)"
+          service: "redpanda-1-admin"
+          tls:
+            passthrough: true
+        redpanda-admin-2:
+          entryPoints:
+            - "rp-admin"
+          rule: "HostSNI(`redpanda-2.local`)"
+          service: "redpanda-2-admin"
+          tls:
+            passthrough: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traefik-ingress-controller
+  namespace: traefik
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: traefik
+  namespace: traefik
+  labels:
+    app.kubernetes.io/name: traefik
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: traefik
+    spec:
+      serviceAccountName: traefik-ingress-controller
+      containers:
+        - name: traefik
+          image: traefik:v2.10
+          args:
+            - --accesslog
+            - --log.level=DEBUG
+            - --entrypoints.rp-kafka.address=:9094/tcp
+            - --entrypoints.rp-admin.address=:9644/tcp
+            - --providers.file.directory=/etc/traefik
+          ports:
+            - name: rp-kafka
+              containerPort: 9094
+            - name: rp-admin
+              containerPort: 9644
+          volumeMounts:
+            - name: traefik-config
+              mountPath: /etc/traefik
+      volumes:
+        - name: traefik-config
+          projected:
+            sources:
+              - configMap:
+                  name: redpanda-config
+                  items:
+                    - key: redpanda.yml
+                      path: redpanda.yml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik-lb
+  namespace: traefik
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: traefik
+  externalTrafficPolicy: Cluster
+  ports:
+  - name: external-rp-kafka
+    protocol: TCP
+    targetPort: rp-kafka
+    port: 9094
+  - name: external-rp-admin
+    protocol: TCP
+    targetPort: rp-admin
+    port: 9644
